@@ -135,3 +135,17 @@ documents it.
 - The webui gateway logs watch-notification spam (`Watch notification not
   admitted ... invalid_params` every 2s in errors.log); unrelated to this
   plugin, do not chase it.
+- **The Command Code desktop app opening on every turn** (fixed in 9619806):
+  the daemon's systemd PATH has no npm prefix, so a PATH-only lookup for the
+  CLI fell through to `command-code` -> `/usr/bin/command-code` ->
+  `/opt/Command Code/command-code`, the Electron desktop build. It ignores the
+  `acp` argument and opens a GUI window; the JSON-RPC handshake never happens,
+  and the turn dies with `Copilot ACP process exited early: libva error: ...`
+  (that libva/ozone stderr is the Electron app booting, not a broken CLI).
+  The npm CLI lives at
+  `~/.local/share/fnm/node-versions/v22.23.4/installation/bin/cmd`. Resolution
+  now searches fnm/nvm/volta/asdf/bun/pnpm prefixes, rejects the desktop
+  bundle, and probes `acp --help` for the ACP blurb. Check with
+  `python3 scripts/install_cmd_acp.py --status` (`resolved ACP binary:`).
+- The npm CLI is a Node script (`#!/usr/bin/env node`), so the child needs
+  `node` on PATH and Node 22+.

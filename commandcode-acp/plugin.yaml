@@ -1,0 +1,5 @@
+name: commandcode-acp-provider
+kind: model-provider
+version: 1.0.0
+description: Command Code (commandcode.ai subscription) via ACP subprocess
+author: kamal

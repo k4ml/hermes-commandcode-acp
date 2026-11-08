@@ -146,7 +146,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  alias cmd.provider: {value}")
     else:
         print("  hermes CLI not on PATH — alias status unknown")
-    print("  commandcode CLI:", shutil.which("commandcode") or "NOT FOUND")
+    print("  commandcode CLI:", "; ".join(
+        f"{n}={shutil.which(n)}" for n in ("cmd", "cmdc", "command-code", "commandcode")
+        if shutil.which(n)) or "NOT FOUND (none of cmd, cmdc, command-code, commandcode)")
     return 0
 
 

@@ -25,6 +25,7 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 from typing import Any
 
 from providers import register_provider
@@ -202,6 +203,20 @@ class CommandCodeACPProfile(ProviderProfile):
             return None
 
 
+def _resolve_cli() -> str:
+    """Binary the ACP subcommand is launched with, resolved on PATH at import.
+
+    The npm package installs several bin names (`cmd`, `cmdc`, `command-code`,
+    `commandcode`) and which ones are on PATH varies by install method — the
+    documented program is `cmd`, so it wins. Hermes resolves the profile's
+    process_command against PATH; a miss fails with the
+    HERMES_COMMANDCODE_ACP_COMMAND hint."""
+    for name in ("cmd", "cmdc", "command-code", "commandcode"):
+        if shutil.which(name):
+            return name
+    return "cmd"
+
+
 commandcode_acp = CommandCodeACPProfile(
     name="commandcode-acp", aliases=("commandcode-acp-agent", "cmd-acp"),
     api_mode="chat_completions",  # ACP subprocess uses chat_completions routing
@@ -209,7 +224,7 @@ commandcode_acp = CommandCodeACPProfile(
     base_url="acp://commandcode",  # ACP internal scheme
     auth_type="external_process",
     # How to launch the CLI; env overrides follow the copilot-acp convention.
-    process_command="commandcode",
+    process_command=_resolve_cli(),
     process_args=("acp",),
     process_command_env_vars=("HERMES_COMMANDCODE_ACP_COMMAND",),
     process_args_env_var="HERMES_COMMANDCODE_ACP_ARGS",

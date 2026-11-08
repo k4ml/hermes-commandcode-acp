@@ -76,6 +76,12 @@ Make it the default with `/model cmd --global` or the `hermes model` picker.
 
 ## Troubleshooting
 
+- **`Could not find the '<provider>' CLI command '<name>'`** — the launch binary is
+  resolved on PATH at plugin import and the serving process imports plugins once;
+  after installing the plugin or editing its source, restart the daemon:
+  `hermes gateway restart`. Fresh `hermes chat` processes always pick up the
+  current file. `HERMES_COMMANDCODE_ACP_COMMAND` (absolute path) overrides the
+  automatic `cmd` / `cmdc` / `command-code` / `commandcode` search.
 - Bridge decisions log to `~/.hermes/logs/agent.log` under
   `CommandCode ACP permission bridge:`.
 - `hermes chat -q` and cron deny risky actions by design (fail closed).

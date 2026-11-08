@@ -122,6 +122,8 @@ def cmd_install(args: argparse.Namespace) -> int:
     set_alias()
     if has_hermes_cli():
         print("  next: hermes chat -q 'Reply OK' -m cmd")
+    print("  note: provider plugins are imported once per process — restart a running")
+    print("        gateway to pick up plugin updates: hermes gateway restart")
     return 0
 
 

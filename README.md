@@ -43,7 +43,8 @@ Hermes-side client for it, following the pattern of Hermes' built-in
 ## Install
 
 ```bash
-git clone <this repo> && cd hermes-commandcode-acp
+git clone https://github.com/k4ml/hermes-commandcode-acp.git
+cd hermes-commandcode-acp
 python3 scripts/install_cmd_acp.py          # copies plugin + registers alias `cmd`
 hermes chat -q 'Reply OK' -m cmd            # verify
 ```

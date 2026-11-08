@@ -21,6 +21,7 @@ commands). After install: `hermes chat -q 'Reply OK' -m cmd`.
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import re
 import shutil
@@ -35,6 +36,69 @@ ALIAS_SETTINGS = (
     ("model_aliases.cmd.provider", "commandcode-acp"),
     ("model_aliases.cmd.model", "deepseek/deepseek-v4.1-flash"),
 )
+
+# The npm CLI installs several bin names; PATH alone is not enough because a
+# daemon launched without the npm prefix in PATH finds only the desktop app's
+# /usr/bin/command-code, which pops a GUI window instead of serving ACP.
+CLI_NAMES = ("cmd", "cmdc", "commandcode", "command-code")
+EXTRA_BIN_DIR_GLOBS = (
+    "~/.local/share/fnm/node-versions/*/installation/bin",
+    "~/.local/share/fnm/node-versions/*/bin",
+    "~/.nvm/versions/node/*/bin",
+    "~/.volta/bin",
+    "~/.asdf/shims",
+    "~/.bun/bin",
+    "~/.local/share/pnpm",
+    "~/.npm-global/bin",
+    "/usr/local/bin",
+)
+
+
+def resolve_cli() -> str:
+    """Absolute path to the Command Code CLI that can serve ACP over stdio.
+
+    Returns the bare name "cmd" when nothing verifies (the plugin then falls
+    back to the HERMES_COMMANDCODE_ACP_COMMAND hint).
+    """
+    candidates: list[str] = []
+    for name in CLI_NAMES:
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    for pattern in EXTRA_BIN_DIR_GLOBS:
+        for directory in sorted(glob.glob(os.path.expanduser(pattern))):
+            if not os.path.isdir(directory):
+                continue
+            for name in CLI_NAMES:
+                candidate = os.path.join(directory, name)
+                if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                    candidates.append(candidate)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        real = os.path.realpath(candidate)
+        if real in seen:
+            continue
+        seen.add(real)
+        # The desktop app is an Electron bundle; it cannot speak ACP.
+        try:
+            if os.path.getsize(real) > 20 * 1024 * 1024:
+                continue
+            with open(real, "rb") as fh:
+                if fh.read(4) == b"\x7fELF":
+                    continue
+        except OSError:
+            continue
+        try:
+            probe = subprocess.run(
+                [candidate, "acp", "--help"], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=25,
+                stdin=subprocess.DEVNULL, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if "agent client protocol" in ((probe.stdout or "") + (probe.stderr or "")).lower():
+            return candidate
+    return "cmd"
 
 
 def hermes_home(explicit: str | None) -> Path:
@@ -151,6 +215,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     print("  commandcode CLI:", "; ".join(
         f"{n}={shutil.which(n)}" for n in ("cmd", "cmdc", "command-code", "commandcode")
         if shutil.which(n)) or "NOT FOUND (none of cmd, cmdc, command-code, commandcode)")
+    resolved = resolve_cli()
+    print(f"  resolved ACP binary: {resolved}")
+    if resolved == "cmd":
+        print("    NOT RESOLVED — set HERMES_COMMANDCODE_ACP_COMMAND to the npm CLI's absolute path")
+    elif "Command Code" in resolved or "command-code" in os.path.basename(resolved):
+        print("    WARNING: that path looks like the desktop app; it cannot serve ACP over stdio")
     return 0
 
 

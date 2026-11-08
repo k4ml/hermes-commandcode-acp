@@ -22,10 +22,12 @@ server messages through `self`, so overrides only fire on a subclass):
 """
 
 import contextlib
+import glob
 import json
 import logging
 import os
 import shutil
+import subprocess
 from typing import Any
 
 from providers import register_provider
@@ -54,6 +56,18 @@ def _client_class() -> type:
     class CommandCodeACPClient(CopilotACPClient):
         """Copilot ACP stdio shim + commandcode mode preset, permission bridging,
         tool-call visibility, continuation steering."""
+
+        # The copilot shim's labels name the wrong tool in every error path
+        # ("Copilot ACP process exited early"); keep them provider-accurate.
+        label = "Command Code ACP"
+        missing_command_hint = (
+            "Install the `command-code` npm package (npm i -g command-code) and run `commandcode login`, "
+            "or set HERMES_COMMANDCODE_ACP_COMMAND to the CLI's absolute path."
+        )
+        unsupported_transport_hint = (
+            "Point HERMES_COMMANDCODE_ACP_COMMAND at the Command Code CLI (the npm package, not the "
+            "desktop app) and HERMES_COMMANDCODE_ACP_ARGS at a working pair."
+        )
 
         def _create_chat_completion(self, *, messages=None, **kwargs):
             """Append the steering directive after tool-execution results.
@@ -203,17 +217,116 @@ class CommandCodeACPProfile(ProviderProfile):
             return None
 
 
-def _resolve_cli() -> str:
-    """Binary the ACP subcommand is launched with, resolved on PATH at import.
+_CLI_NAMES = ("cmd", "cmdc", "commandcode", "command-code")
 
-    The npm package installs several bin names (`cmd`, `cmdc`, `command-code`,
-    `commandcode`) and which ones are on PATH varies by install method — the
-    documented program is `cmd`, so it wins. Hermes resolves the profile's
-    process_command against PATH; a miss fails with the
-    HERMES_COMMANDCODE_ACP_COMMAND hint."""
-    for name in ("cmd", "cmdc", "command-code", "commandcode"):
-        if shutil.which(name):
-            return name
+# Directories that hold npm-global bins but are routinely missing from a
+# daemon's PATH (fnm/nvm/volta/asdf/bun/pnpm). The systemd unit's PATH has
+# none of them, so a plain PATH lookup finds only the desktop app's
+# `/usr/bin/command-code` and the ACP spawn opens the GUI instead of talking
+# JSON-RPC over stdio.
+_EXTRA_BIN_DIR_GLOBS = (
+    "~/.local/share/fnm/node-versions/*/installation/bin",
+    "~/.local/share/fnm/node-versions/*/bin",
+    "~/.nvm/versions/node/*/bin",
+    "~/.volta/bin",
+    "~/.asdf/shims",
+    "~/.bun/bin",
+    "~/.local/share/pnpm",
+    "~/.npm-global/bin",
+    "/usr/local/bin",
+)
+
+
+def _extra_bin_dirs() -> list[str]:
+    """Existing npm-global bin dirs, most specific install first."""
+    dirs: list[str] = []
+    for pattern in _EXTRA_BIN_DIR_GLOBS:
+        for path in sorted(glob.glob(os.path.expanduser(pattern))):
+            if os.path.isdir(path) and path not in dirs:
+                dirs.append(path)
+    return dirs
+
+
+def _is_electron_desktop_app(path: str) -> bool:
+    """True for the Command Code *desktop app* binary, which cannot speak ACP.
+
+    The desktop build is an Electron bundle (ELF, ~200MB, living next to
+    chrome-sandbox/libEGL.so). Spawned with the `acp` subcommand it ignores the
+    argument and opens the GUI window instead of serving JSON-RPC on stdio.
+    """
+    try:
+        real = os.path.realpath(path)
+        if os.path.getsize(real) > 20 * 1024 * 1024:
+            return True
+        parent = os.path.dirname(real)
+        for marker in ("chrome-sandbox", "libEGL.so", "chrome_100_percent.pak"):
+            if os.path.exists(os.path.join(parent, marker)):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _speaks_acp(path: str) -> bool:
+    """True when `path` is the CLI and answers `acp --help` with the ACP blurb.
+
+    Only probed for non-ELF candidates (the npm CLI is a Node script), so the
+    probe can never pop the desktop app's window."""
+    try:
+        with open(path, "rb") as fh:
+            if fh.read(4) == b"\x7fELF":
+                return False
+    except OSError:
+        return False
+    try:
+        probe = subprocess.run(
+            [path, "acp", "--help"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=25,
+            stdin=subprocess.DEVNULL, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    out = (probe.stdout or "") + (probe.stderr or "")
+    return "agent client protocol" in out.lower()
+
+
+def _resolve_cli() -> str:
+    """Binary the ACP subcommand is launched with, resolved at import.
+
+    The npm package installs several bin names (`cmd`, `cmdc`, `commandcode`,
+    `command-code`) and which ones are on PATH varies by install method — the
+    documented program is `cmd`, so it wins. PATH alone is not enough: a
+    daemon launched without the npm prefix in PATH would otherwise land on the
+    desktop app's `/usr/bin/command-code` and spawn a GUI window per turn.
+
+    Returns an absolute path to the verified CLI so Hermes re-resolves exactly
+    the binary that was checked here. A miss falls back to the bare `cmd`
+    name, and the provider surfaces the HERMES_COMMANDCODE_ACP_COMMAND hint.
+    """
+    candidates: list[str] = []
+    for name in _CLI_NAMES:
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    for directory in _extra_bin_dirs():
+        for name in _CLI_NAMES:
+            candidate = os.path.join(directory, name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                candidates.append(candidate)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        real = os.path.realpath(candidate)
+        if real in seen:
+            continue
+        seen.add(real)
+        if _is_electron_desktop_app(candidate):
+            logger.info(
+                "CommandCode ACP: skipping desktop app binary %s (not an ACP agent)", candidate)
+            continue
+        if _speaks_acp(candidate):
+            return candidate
+        logger.info("CommandCode ACP: candidate %s does not expose an `acp` subcommand", candidate)
     return "cmd"
 
 

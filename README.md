@@ -89,6 +89,20 @@ Make it the default with `/model cmd --global` or the `hermes model` picker.
   `~/.commandcode/projects/<project>/*.jsonl`; a turn ending on a denied
   tool-result line means the permission bridge denied, not that the turn
   completed.
+- **The Command Code desktop app pops open on every turn?** The plugin is
+  spawning the Electron desktop build instead of the CLI. The desktop binary
+  (`/usr/bin/command-code`, symlinked to `/opt/Command Code/command-code`)
+  ignores the `acp` argument and opens a window. The plugin now resolves the
+  npm CLI explicitly and rejects the desktop bundle, but a daemon started
+  before that fix still holds the old resolution — restart it with
+  `hermes gateway restart`. Check the resolution with
+  `python3 scripts/install_cmd_acp.py --status`; it prints
+  `resolved ACP binary:`. A path under `/opt/Command Code` means the desktop
+  app is in use.
+- The npm CLI is a Node script, so it needs `node` on PATH (Node 22+). The
+  plugin resolves the CLI under fnm/nvm/volta/asdf/bun/pnpm install prefixes
+  even when the daemon's PATH omits them; if the CLI lives somewhere else,
+  point `HERMES_COMMANDCODE_ACP_COMMAND` at its absolute path.
 
 ## Billing
 
